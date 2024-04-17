@@ -23,6 +23,10 @@ if src_dir not in sys.path:
 
 import config.kitti_config as cnf
 
+def cls_id_to_name(cls_id):
+        if cls_id not in cnf.CLASS_ID_TO_NAME.keys():
+            return 'DontCare'
+        return cnf.CLASS_ID_TO_NAME[cls_id]
 
 class Object3d(object):
     ''' 3d object label '''

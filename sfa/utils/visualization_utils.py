@@ -58,7 +58,7 @@ def project_to_image(pts_3d, P):
     pts_2d = np.dot(P, pts_3d_homo.transpose(1, 0)).transpose(1, 0)
     pts_2d = pts_2d[:, :2] / pts_2d[:, 2:]
 
-    return pts_2d.astype(np.int)
+    return pts_2d.astype(int)
 
 
 def draw_box_3d_v2(image, qs, color=(255, 0, 255), thickness=2):
@@ -119,6 +119,37 @@ def draw_box_3d(image, corners, color=(0, 0, 255)):
 
     return image
 
+def show_label_info(image, fused_object_bbox, label, ground_speed=None):
+
+	if label != '':
+		color = (0, 255, 0)
+		x1, y1, x2, y2 = fused_object_bbox[0], fused_object_bbox[1],fused_object_bbox[2],fused_object_bbox[3]
+		cx = int((x1+x2)/2)
+		cy = int((y1+y2)/2)
+		_, frame_width, c = image.shape
+
+		y1=abs(x2%300)-(130)
+		x2=x1-100
+		if(y1<40):
+			y1=80
+		if(x2>frame_width-100):
+			x2=frame_width-100
+
+		t_size = cv2.getTextSize(label, 0, fontScale=0.5, thickness=2)[0]
+		c2 = int(x2) + t_size[0] + 2, int(y1) - t_size[1] - 5
+		cv2.rectangle(image, (int(x2),int(y1)), c2, (0,165,255), -1, cv2.LINE_AA)
+		cv2.putText(image, label, (int(x2),int(y1)-2), 0, 0.5, (255,255,255), thickness=2, lineType=cv2.LINE_AA)
+		cv2.line(image, (cx,cy), (int(x2),int(y1)), color, thickness=2)
+		cv2.circle(image, (cx,cy), 3, (0,165,255), cv2.FILLED)
+	
+	# gx = 0
+	# gy = int(image.shape[0])
+	# # ground_speed_label = f'ground_speed_x: {ground_speed[0]:.2f} kmph, ground_speed_y: {ground_speed[2]:.2f} kmph, net_ground_speed: {sqrt(ground_speed[2]**2+ground_speed[0]**2):.2f} kmph'
+	# ground_speed_label = f'ground_speed: {ground_speed[0]:.2f} kmph'
+	# t_size = cv2.getTextSize(ground_speed_label, 0, fontScale=0.5, thickness=2)[0]
+	# c2 = int(gx) + t_size[0] + 2, int(gy) - t_size[1] - 5
+	# cv2.rectangle(image, (gx, gy), c2, (0,165,255), -1, cv2.LINE_AA)
+	# cv2.putText(image, ground_speed_label, (gx,gy-4), 0, 0.5, (255,255,255), thickness=2, lineType=cv2.LINE_AA)
 
 def show_rgb_image_with_boxes(img, labels, calib):
     for box_idx, label in enumerate(labels):
@@ -130,6 +161,10 @@ def show_rgb_image_with_boxes(img, labels, calib):
         corners_3d = compute_box_3d(dim, location, ry)
         corners_2d = project_to_image(corners_3d, calib.P2)
         img = draw_box_3d(img, corners_2d, color=cnf.colors[int(cls_id)])
+        face_xyxy = [corners_2d[2][0], corners_2d[2][1], corners_2d[7][0], corners_2d[7][1]]
+        label = f'dist {corners_3d[7][2]:.2f} m'
+        show_label_info(img, face_xyxy, label)
+
 
     return img
 

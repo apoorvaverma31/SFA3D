@@ -35,7 +35,7 @@ from utils.torch_utils import _sigmoid
 import config.kitti_config as cnf
 from data_process.transformation import lidar_to_camera_box
 from utils.visualization_utils import merge_rgb_to_bev, show_rgb_image_with_boxes
-from data_process.kitti_data_utils import Calibration
+from data_process.kitti_data_utils import Calibration, cls_id_to_name
 
 
 def parse_test_configs():
@@ -68,6 +68,8 @@ def parse_test_configs():
                         help='the video filename if the output format is video')
     parser.add_argument('--output-width', type=int, default=608,
                         help='the width of showing output, the height maybe vary')
+    parser.add_argument('--seq', type=str, default='0000',
+                        help='default seq no')
 
     configs = edict(vars(parser.parse_args()))
     configs.pin_memory = True
@@ -98,11 +100,13 @@ def parse_test_configs():
     ####################################################################
     ##############Dataset, Checkpoints, and results dir configs#########
     ####################################################################
-    configs.root_dir = '../'
-    configs.dataset_dir = os.path.join(configs.root_dir, 'dataset', 'kitti')
-
+    configs.root_dir = 'D:\\Apoorva'
+    configs.dataset_dir = os.path.join(configs.root_dir, 'data', 'KITTI-tracking-dataset')
+    configs.image_dir = os.path.join(configs.dataset_dir, 'testing', 'image_02')
+    configs.calib_dir = os.path.join(configs.dataset_dir, 'testing', 'calib')
+    configs.image_dir_seq = os.path.join(configs.image_dir, configs.seq)
     if configs.save_test_output:
-        configs.results_dir = os.path.join(configs.root_dir, 'results', configs.saved_fn)
+        configs.results_dir = os.path.join(configs.root_dir, 'outputs','lidar-sf3d', configs.saved_fn)
         make_folder(configs.results_dir)
 
     return configs
@@ -110,7 +114,7 @@ def parse_test_configs():
 
 if __name__ == '__main__':
     configs = parse_test_configs()
-
+    configs.num_samples = len(os.listdir(configs.image_dir_seq))
     model = create_model(configs)
     print('\n\n' + '-*=' * 30 + '\n\n')
     assert os.path.isfile(configs.pretrained_path), "No file at {}".format(configs.pretrained_path)
@@ -124,8 +128,19 @@ if __name__ == '__main__':
 
     model.eval()
 
+    det_lines = []
+
     test_dataloader = create_test_dataloader(configs)
     with torch.no_grad():
+        if configs.save_test_output:
+            configs.results_dir_img = os.path.join(configs.results_dir, 'image', configs.seq)
+            configs.results_dir_vid = os.path.join(configs.results_dir, 'video', configs.seq)
+            if os.path.exists(configs.results_dir_img) is False:
+                os.makedirs(configs.results_dir_img)
+            if os.path.exists(configs.results_dir_vid) is False:
+                os.makedirs(configs.results_dir_vid)
+            print(f'saving at {configs.results_dir}')
+        
         for batch_idx, batch_data in enumerate(test_dataloader):
             metadatas, bev_maps, img_rgbs = batch_data
             input_bev_maps = bev_maps.to(configs.device, non_blocking=True).float()
@@ -153,10 +168,19 @@ if __name__ == '__main__':
             img_rgb = img_rgbs[0].numpy()
             img_rgb = cv2.resize(img_rgb, (img_rgb.shape[1], img_rgb.shape[0]))
             img_bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
-            calib = Calibration(img_path.replace(".png", ".txt").replace("image_2", "calib"))
+            calib = Calibration(os.path.join(configs.calib_dir, configs.seq+'.txt'))
             kitti_dets = convert_det_to_real_values(detections)
             if len(kitti_dets) > 0:
                 kitti_dets[:, 1:] = lidar_to_camera_box(kitti_dets[:, 1:], calib.V2C, calib.R0, calib.P2)
+                # kitti dets ko hi txt mei likhna hai
+                for box_idx, label in enumerate(kitti_dets):
+                    cls_id, location, dim, ry = label[0], label[1:4], label[4:7], label[7]
+                    if location[2] < 2.0:  # The object is too close to the camera, ignore it during visualization
+                        continue
+                    if cls_id < 0:
+                        continue
+                    line = [batch_idx, -1, cls_id_to_name(cls_id), -1, -1, -1, -1, -1, -1, -1, location[0], location[1], location[2], dim[0], dim[1], dim[2], ry, -1]
+                    det_lines.append(line)
                 img_bgr = show_rgb_image_with_boxes(img_bgr, kitti_dets, calib)
 
             out_img = merge_rgb_to_bev(img_bgr, bev_map, output_width=configs.output_width)
@@ -164,25 +188,31 @@ if __name__ == '__main__':
             print('\tDone testing the {}th sample, time: {:.1f}ms, speed {:.2f}FPS'.format(batch_idx, (t2 - t1) * 1000,
                                                                                            1 / (t2 - t1)))
             if configs.save_test_output:
-                if configs.output_format == 'image':
-                    img_fn = os.path.basename(metadatas['img_path'][0])[:-4]
-                    cv2.imwrite(os.path.join(configs.results_dir, '{}.jpg'.format(img_fn)), out_img)
-                elif configs.output_format == 'video':
-                    if out_cap is None:
-                        out_cap_h, out_cap_w = out_img.shape[:2]
-                        fourcc = cv2.VideoWriter_fourcc(*'MJPG')
-                        out_cap = cv2.VideoWriter(
-                            os.path.join(configs.results_dir, '{}.avi'.format(configs.output_video_fn)),
-                            fourcc, 30, (out_cap_w, out_cap_h))
 
+                img_fn = os.path.basename(metadatas['img_path'][0])[:-4]
+                cv2.imwrite(os.path.join(configs.results_dir_img,'{}.jpg'.format(img_fn)), out_img)            
+                if out_cap is None:
+                    out_cap_h, out_cap_w = out_img.shape[:2]
+                    fourcc = cv2.VideoWriter_fourcc(*'MJPG')
+                    out_cap = cv2.VideoWriter(
+                        os.path.join(configs.results_dir_vid, '{}.avi'.format(configs.output_video_fn)),
+                        fourcc, 20, (out_cap_w, out_cap_h))
                     out_cap.write(out_img)
                 else:
                     raise TypeError
 
-            cv2.imshow('test-img', out_img)
-            print('\n[INFO] Press n to see the next sample >>> Press Esc to quit...\n')
-            if cv2.waitKey(0) & 0xFF == 27:
-                break
+            # cv2.imshow('test-img', out_img)
+            # print('\n[INFO] Press n to see the next sample >>> Press Esc to quit...\n')
+            # if cv2.waitKey(0) & 0xFF == 27:
+            #     break
     if out_cap:
         out_cap.release()
     cv2.destroyAllWindows()
+
+    output_label_file = 'D:\\Apoorva\\testfile.txt'
+    with open(output_label_file, 'w') as f:
+        for sublist in det_lines:
+            line = ' '.join(map(str, sublist)) + '\n'
+            f.write(line)
+    
+

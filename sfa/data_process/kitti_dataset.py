@@ -33,9 +33,10 @@ import config.kitti_config as cnf
 class KittiDataset(Dataset):
     def __init__(self, configs, mode='train', lidar_aug=None, hflip_prob=None, num_samples=None):
         self.dataset_dir = configs.dataset_dir
+        self.seq = configs.seq
         self.input_size = configs.input_size
         self.hm_size = configs.hm_size
-
+        self.seq = configs.seq
         self.num_classes = configs.num_classes
         self.max_objects = configs.max_objects
 
@@ -45,18 +46,18 @@ class KittiDataset(Dataset):
         sub_folder = 'testing' if self.is_test else 'training'
 
         self.lidar_aug = lidar_aug
-        self.hflip_prob = hflip_prob
+        if hflip_prob is not None:
+            self.hflip_prob = float(hflip_prob)
 
-        self.image_dir = os.path.join(self.dataset_dir, sub_folder, "image_2")
-        self.lidar_dir = os.path.join(self.dataset_dir, sub_folder, "velodyne")
+        self.image_dir = os.path.join(self.dataset_dir, sub_folder, "image_02", self.seq)
+        self.lidar_dir = os.path.join(self.dataset_dir, sub_folder, "velodyne", self.seq)
         self.calib_dir = os.path.join(self.dataset_dir, sub_folder, "calib")
-        self.label_dir = os.path.join(self.dataset_dir, sub_folder, "label_2")
-        split_txt_path = os.path.join(self.dataset_dir, 'ImageSets', '{}.txt'.format(mode))
-        self.sample_id_list = [int(x.strip()) for x in open(split_txt_path).readlines()]
-
-        if num_samples is not None:
-            self.sample_id_list = self.sample_id_list[:num_samples]
-        self.num_samples = len(self.sample_id_list)
+        self.label_dir = os.path.join(self.dataset_dir, sub_folder, "label_02")
+        
+        self.num_samples = num_samples
+        self.sample_id_list = ['{:06d}'.format(x) for x in range(num_samples)]
+        
+        
 
     def __len__(self):
         return len(self.sample_id_list)
@@ -101,7 +102,7 @@ class KittiDataset(Dataset):
         bev_map = torch.from_numpy(bev_map)
 
         hflipped = False
-        if np.random.random() < self.hflip_prob:
+        if np.random.random() < float(self.hflip_prob):
             hflipped = True
             # C, H, W
             bev_map = torch.flip(bev_map, [-1])
@@ -121,8 +122,8 @@ class KittiDataset(Dataset):
 
         return img_path, img
 
-    def get_calib(self, idx):
-        calib_file = os.path.join(self.calib_dir, '{:06d}.txt'.format(idx))
+    def get_calib(self, seq):
+        calib_file = os.path.join(self.calib_dir, seq+'.txt')
         # assert os.path.isfile(calib_file)
         return Calibration(calib_file)
 
@@ -131,29 +132,30 @@ class KittiDataset(Dataset):
         # assert os.path.isfile(lidar_file)
         return np.fromfile(lidar_file, dtype=np.float32).reshape(-1, 4)
 
-    def get_label(self, idx):
+    def get_label(self, seq, idx):
         labels = []
-        label_path = os.path.join(self.label_dir, '{:06d}.txt'.format(idx))
+        label_path = os.path.join(self.label_dir, seq+'.txt')
         for line in open(label_path, 'r'):
             line = line.rstrip()
             line_parts = line.split(' ')
-            obj_name = line_parts[0]  # 'Car', 'Pedestrian', ...
-            cat_id = int(cnf.CLASS_NAME_TO_ID[obj_name])
-            if cat_id <= -99:  # ignore Tram and Misc
-                continue
-            truncated = int(float(line_parts[1]))  # truncated pixel ratio [0..1]
-            occluded = int(line_parts[2])  # 0=visible, 1=partly occluded, 2=fully occluded, 3=unknown
-            alpha = float(line_parts[3])  # object observation angle [-pi..pi]
-            # xmin, ymin, xmax, ymax
-            bbox = np.array([float(line_parts[4]), float(line_parts[5]), float(line_parts[6]), float(line_parts[7])])
-            # height, width, length (h, w, l)
-            h, w, l = float(line_parts[8]), float(line_parts[9]), float(line_parts[10])
-            # location (x,y,z) in camera coord.
-            x, y, z = float(line_parts[11]), float(line_parts[12]), float(line_parts[13])
-            ry = float(line_parts[14])  # yaw angle (around Y-axis in camera coordinates) [-pi..pi]
+            if(line_parts[0] == str(idx)):
+                obj_name = line_parts[2]  # 'Car', 'Pedestrian', ...
+                cat_id = int(cnf.CLASS_NAME_TO_ID[obj_name])
+                if cat_id <= -99:  # ignore Tram and Misc
+                    continue
+                truncated = int(float(line_parts[1]))  # truncated pixel ratio [0..1]
+                occluded = int(line_parts[4])  # 0=visible, 1=partly occluded, 2=fully occluded, 3=unknown
+                alpha = float(line_parts[5])  # object observation angle [-pi..pi]
+                # xmin, ymin, xmax, ymax
+                bbox = np.array([float(line_parts[6]), float(line_parts[7]), float(line_parts[8]), float(line_parts[9])])
+                # height, width, length (h, w, l)
+                h, w, l = float(line_parts[10]), float(line_parts[11]), float(line_parts[12])
+                # location (x,y,z) in camera coord.
+                x, y, z = float(line_parts[13]), float(line_parts[14]), float(line_parts[15])
+                ry = float(line_parts[16])  # yaw angle (around Y-axis in camera coordinates) [-pi..pi]
 
-            object_label = [cat_id, x, y, z, h, w, l, ry]
-            labels.append(object_label)
+                object_label = [cat_id, x, y, z, h, w, l, ry]
+                labels.append(object_label)
 
         if len(labels) == 0:
             labels = np.zeros((1, 8), dtype=np.float32)
@@ -257,8 +259,8 @@ class KittiDataset(Dataset):
         sample_id = int(self.sample_id_list[index])
         img_path, img_rgb = self.get_image(sample_id)
         lidarData = self.get_lidar(sample_id)
-        calib = self.get_calib(sample_id)
-        labels, has_labels = self.get_label(sample_id)
+        calib = self.get_calib(self.seq)
+        labels, has_labels = self.get_label(self.seq, idx)
         if has_labels:
             labels[:, 1:] = transformation.camera_to_lidar_box(labels[:, 1:], calib.V2C, calib.R0, calib.P2)
 
@@ -279,14 +281,15 @@ if __name__ == '__main__':
     configs = edict()
     configs.distributed = False  # For testing
     configs.pin_memory = False
-    configs.num_samples = None
+    configs.num_samples = 10
     configs.input_size = (608, 608)
     configs.hm_size = (152, 152)
     configs.max_objects = 50
     configs.num_classes = 3
     configs.output_width = 608
+    configs.seq = '0000'
 
-    configs.dataset_dir = os.path.join('../../', 'dataset', 'kitti')
+    configs.dataset_dir = os.path.abspath('D:\\Apoorva\\data\\KITTI-tracking-dataset')
     # lidar_aug = OneOf([
     #     Random_Rotation(limit_angle=np.pi / 4, p=1.),
     #     Random_Scaling(scaling_range=(0.95, 1.05), p=1.),
@@ -294,11 +297,12 @@ if __name__ == '__main__':
     lidar_aug = None
 
     dataset = KittiDataset(configs, mode='val', lidar_aug=lidar_aug, hflip_prob=0., num_samples=configs.num_samples)
+    print('len ds {}'.format(len(dataset)))
 
     print('\n\nPress n to see the next sample >>> Press Esc to quit...')
     for idx in range(len(dataset)):
         bev_map, labels, img_rgb, img_path = dataset.draw_img_with_label(idx)
-        calib = Calibration(img_path.replace(".png", ".txt").replace("image_2", "calib"))
+        calib = Calibration(os.path.join(dataset.calib_dir, configs.seq+'.txt'))
         bev_map = (bev_map.transpose(1, 2, 0) * 255).astype(np.uint8)
         bev_map = cv2.resize(bev_map, (cnf.BEV_HEIGHT, cnf.BEV_WIDTH))
 
